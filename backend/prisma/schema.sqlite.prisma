@@ -1,0 +1,539 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// -------------------------------------------------------------
+// Core Tenancy & Identity Models
+// -------------------------------------------------------------
+
+model Organization {
+  id                    String            @id @default(uuid())
+  name                  String
+  slug                  String            @unique
+  plan                  String            @default("ENTERPRISE") // FREE, PRO, ENTERPRISE
+  subscriptionTier      String            @default("ENTERPRISE") // FREE, PRO, ENTERPRISE
+  subscriptionExpiresAt DateTime?
+  quotaMessagesLimit    Int               @default(50000)
+  quotaMessagesUsed     Int               @default(0)
+  quotaAccountsLimit    Int               @default(50)
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  users                 User[]
+  memberships           Membership[]
+  accounts              TelegramAccount[]
+  proxies               Proxy[]
+  campaigns             Campaign[]
+  groups                GroupTarget[]
+  addTasks              AddMembersTask[]
+  auditLogs             AuditLog[]
+  bots                  TelegramBot[]
+
+  @@index([slug])
+}
+
+model User {
+  id                    String                  @id @default(uuid())
+  email                 String                  @unique
+  passwordHash          String
+  name                  String?
+  role                  String                  @default("OWNER") // OWNER, ADMIN, MEMBER, VIEWER
+  plan                  String                  @default("ENTERPRISE") // FREE, PRO, ENTERPRISE
+  subscriptionTier      String                  @default("ENTERPRISE") // FREE, PRO, ENTERPRISE
+  subscriptionExpiresAt DateTime?
+  quotaMessagesLimit    Int                     @default(5000)
+  quotaMessagesUsed     Int                     @default(0)
+  quotaAccountsLimit    Int                     @default(10)
+  isActive              Boolean                 @default(true)
+  orgId                 String?
+  org                   Organization?           @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  accounts              TelegramAccount[]
+  proxies               Proxy[]
+  campaigns             Campaign[]
+  groups                GroupTarget[]
+  addTasks              AddMembersTask[]
+  auditLogs             AuditLog[]
+  sessions              UserSession[]
+  notifications         Notification[]
+  memberships           Membership[]
+  paymentReceipts       PaymentReceiptRequest[]
+  bots                  TelegramBot[]
+
+  @@index([email])
+  @@index([orgId])
+}
+
+model Membership {
+  id        String       @id @default(uuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  role      String       @default("MEMBER") // OWNER, ADMIN, MEMBER, VIEWER
+  createdAt DateTime     @default(now())
+
+  @@unique([userId, orgId])
+  @@index([userId])
+  @@index([orgId])
+}
+
+model UserSession {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String    @unique
+  ipAddress    String?
+  userAgent    String?
+  isRevoked    Boolean   @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  lastActiveAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([refreshToken])
+}
+
+// -------------------------------------------------------------
+// Network & Proxy Management
+// -------------------------------------------------------------
+
+model Proxy {
+  id             String            @id @default(uuid())
+  userId         String
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId          String?
+  org            Organization?     @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  host           String
+  port           Int
+  protocol       String            @default("socks5") // socks5, http, https
+  username       String?
+  password       String?
+  isActive       Boolean           @default(true)
+  responseTimeMs Int?              @default(0)
+  lastCheckedAt  DateTime?
+  failureCount   Int               @default(0)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  accounts       TelegramAccount[]
+
+  @@index([userId])
+  @@index([isActive])
+}
+
+// -------------------------------------------------------------
+// Telegram Accounts & Sessions
+// -------------------------------------------------------------
+
+model TelegramAccount {
+  id              String            @id @default(uuid())
+  userId          String
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId           String?
+  org             Organization?     @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  phone           String            @unique
+  apiId           Int
+  apiHash         String
+  sessionString   String?           // AES-256-GCM Encrypted GramJS StringSession
+  status          String            @default("PENDING_AUTH") // PENDING_AUTH, ACTIVE, FLOOD_WAIT, BANNED, INACTIVE, COOLDOWN
+  floodWaitUntil  DateTime?
+  dailyLimit      Int               @default(40)
+  sentToday       Int               @default(0)
+  totalSent       Int               @default(0)
+  totalFailed     Int               @default(0)
+  lastSentAt      DateTime?
+  warmupMode      Boolean           @default(true)
+  warmupDays      Int               @default(1)
+  healthScore     Int               @default(100) // 0 - 100%
+  tier            String            @default("TIER_1") // TIER_1 (New), TIER_2 (Warmed), TIER_3 (Veteran)
+  firstName       String?
+  lastName        String?
+  username        String?
+  proxyId         String?
+  proxy           Proxy?            @relation(fields: [proxyId], references: [id], onDelete: SetNull)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  campaignLogs    CampaignLog[]
+  campaignEvents  CampaignEvent[]
+  addMembersLogs  AddMembersLog[]
+  sessions        TelegramSession[]
+
+  @@index([userId])
+  @@index([phone])
+  @@index([status])
+  @@index([proxyId])
+}
+
+model TelegramSession {
+  id           String          @id @default(uuid())
+  accountId    String
+  account      TelegramAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  sessionHash  String
+  ipAddress    String?
+  deviceModel  String?
+  isActive     Boolean         @default(true)
+  lastActiveAt DateTime        @default(now())
+  createdAt    DateTime        @default(now())
+
+  @@index([accountId])
+}
+
+// -------------------------------------------------------------
+// Telegram Audiences & Scraping
+// -------------------------------------------------------------
+
+model GroupTarget {
+  id          String           @id @default(uuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId       String?
+  org         Organization?    @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  title       String
+  username    String?
+  chatId      String?
+  memberCount Int              @default(0)
+  scrapedAt   DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  members     ScrapedMember[]
+  campaigns   Campaign[]
+  addTasks    AddMembersTask[]
+
+  @@index([userId])
+  @@index([username])
+}
+
+model ScrapedMember {
+  id          String           @id @default(uuid())
+  groupId     String
+  group       GroupTarget      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId      String           // Telegram numeric user ID
+  accessHash  String?
+  username    String?
+  firstName   String?
+  lastName    String?
+  phone       String?
+  status      String?          // online, offline, recently, last_week, unknown
+  isBot       Boolean          @default(false)
+  isScam      Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  targets     CampaignTarget[]
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+  @@index([username])
+  @@index([status])
+}
+
+// -------------------------------------------------------------
+// Campaigns, Runs & Events Architecture
+// -------------------------------------------------------------
+
+model Campaign {
+  id              String           @id @default(uuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId           String?
+  org             Organization?    @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  name            String
+  messageTemplate String           // Supports Spintax and variables {firstName}, {username}
+  groupId         String?
+  group           GroupTarget?     @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  delayMinSeconds Int              @default(15)
+  delayMaxSeconds Int              @default(45)
+  status          String           @default("DRAFT") // DRAFT, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED
+  totalTargets    Int              @default(0)
+  sentCount       Int              @default(0)
+  failedCount     Int              @default(0)
+  policyConfig    String?          // JSON policy options (rate limit, anti-flood, warm filter)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  targets         CampaignTarget[]
+  runs            CampaignRun[]
+  events          CampaignEvent[]
+  logs            CampaignLog[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([groupId])
+}
+
+model CampaignTarget {
+  id              String         @id @default(uuid())
+  campaignId      String
+  campaign        Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  scrapedMemberId String?
+  scrapedMember   ScrapedMember? @relation(fields: [scrapedMemberId], references: [id], onDelete: SetNull)
+  targetUserId    String
+  username        String?
+  firstName       String?
+  status          String         @default("PENDING") // PENDING, SENT, FAILED, SKIPPED
+  lastAttemptAt   DateTime?
+  error           String?
+  createdAt       DateTime       @default(now())
+
+  @@index([campaignId])
+  @@index([targetUserId])
+  @@index([status])
+}
+
+model CampaignRun {
+  id             String          @id @default(uuid())
+  campaignId     String
+  campaign       Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  status         String          @default("RUNNING") // RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED
+  totalCount     Int             @default(0)
+  processedCount Int             @default(0)
+  successCount   Int             @default(0)
+  failedCount    Int             @default(0)
+  progress       Int             @default(0) // 0-100%
+  startedAt      DateTime        @default(now())
+  endedAt        DateTime?
+  triggeredBy    String?
+  events         CampaignEvent[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([campaignId])
+  @@index([status])
+}
+
+model CampaignEvent {
+  id             String           @id @default(uuid())
+  campaignRunId  String?
+  campaignRun    CampaignRun?     @relation(fields: [campaignRunId], references: [id], onDelete: Cascade)
+  campaignId     String
+  campaign       Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  accountId      String?
+  account        TelegramAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  targetUserId   String
+  targetUsername String?
+  eventType      String           // MESSAGE_SENT, FLOOD_WAIT, PRIVACY_ERROR, PEER_FLOOD, SYSTEM_ERROR
+  status         String           // SUCCESS, FAILED, RETRYING
+  error          String?
+  metadata       String?          // JSON payload
+  createdAt      DateTime         @default(now())
+
+  @@index([campaignId])
+  @@index([campaignRunId])
+  @@index([accountId])
+  @@index([eventType])
+}
+
+// Kept for backward compatibility
+model CampaignLog {
+  id           String           @id @default(uuid())
+  campaignId   String
+  campaign     Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  accountId    String?
+  account      TelegramAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  targetUserId String
+  status       String           // SUCCESS, FAILED, FLOOD_WAIT
+  error        String?
+  sentAt       DateTime         @default(now())
+
+  @@index([campaignId])
+  @@index([accountId])
+}
+
+// -------------------------------------------------------------
+// Automation & Member Adder
+// -------------------------------------------------------------
+
+model AddMembersTask {
+  id                     String          @id @default(uuid())
+  userId                 String
+  user                   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId                  String?
+  org                    Organization?   @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  name                   String
+  sourceGroupId          String?
+  sourceGroup            GroupTarget?    @relation(fields: [sourceGroupId], references: [id], onDelete: SetNull)
+  targetGroup            String          // @mygroup or invite link
+  delayMinSeconds        Int             @default(20)
+  delayMaxSeconds        Int             @default(50)
+  status                 String          @default("DRAFT") // DRAFT, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED
+  totalTargets           Int             @default(0)
+  addedCount             Int             @default(0)
+  failedCount            Int             @default(0)
+  privacyRestrictedCount Int             @default(0)
+  alreadyMemberCount     Int             @default(0)
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  logs                   AddMembersLog[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model AddMembersLog {
+  id             String           @id @default(uuid())
+  taskId         String
+  task           AddMembersTask   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  accountId      String?
+  account        TelegramAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  targetUserId   String
+  targetUsername String?
+  status         String           // SUCCESS, PRIVACY_RESTRICTED, ALREADY_PARTICIPANT, FLOOD_WAIT, FAILED
+  error          String?
+  addedAt        DateTime         @default(now())
+
+  @@index([taskId])
+  @@index([accountId])
+}
+
+// -------------------------------------------------------------
+// Observability, Audit & Notifications
+// -------------------------------------------------------------
+
+model AuditLog {
+  id        String        @id @default(uuid())
+  userId    String?
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  orgId     String?
+  org       Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  action    String        // LOGIN, LOGOUT, ACCOUNT_ADD, CAMPAIGN_START, PROXY_ADD, ETC
+  entity    String        // User, TelegramAccount, Campaign, Proxy, etc.
+  entityId  String?
+  details   String?       // JSON metadata
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime      @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   @default("INFO") // INFO, SUCCESS, WARNING, ERROR
+  read      Boolean  @default(false)
+  actionUrl String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([read])
+}
+
+model SystemEvent {
+  id        String   @id @default(uuid())
+  level     String   @default("INFO") // INFO, WARN, ERROR, CRITICAL
+  source    String   // MTPROTO, BULLMQ, AUTH, PROXY
+  message   String
+  metadata  String?  // JSON
+  createdAt DateTime @default(now())
+
+  @@index([level])
+  @@index([source])
+  @@index([createdAt])
+}
+
+// -------------------------------------------------------------
+// Billing, Subscriptions & Payment Receipts
+// -------------------------------------------------------------
+
+model PaymentReceiptRequest {
+  id                   String    @id @default(uuid())
+  userId               String
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planRequested        String    // PRO, ENTERPRISE
+  durationMonths       Int       @default(1)
+  amountPaid           Float
+  currency             String    @default("USD") // USD, SAR, AED, USDT
+  paymentMethod        String    // BANK_TRANSFER, CRYPTO_USDT, VODAFONE_CASH, STC_PAY, MANUAL
+  transactionReference String?
+  receiptImageUrl      String
+  adminNotes           String?
+  status               String    @default("PENDING") // PENDING, APPROVED, REJECTED
+  reviewedBy           String?
+  reviewedAt           DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// -------------------------------------------------------------
+// Official Telegram Bot API Management & Broadcast Engine
+// -------------------------------------------------------------
+
+model TelegramBot {
+  id              String          @id @default(uuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId           String?
+  org             Organization?   @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  token           String          @unique // Bot API Token e.g. 123456:ABC-DEF...
+  botId           String          // Numeric Bot ID extracted from token
+  username        String?         // @MyOfficialBot
+  firstName       String?
+  webhookUrl      String?
+  isActive        Boolean         @default(true)
+  autoReplyRules  String?         // JSON string for keyword / button auto-responses
+  welcomeMessage  String?
+  subscriberCount Int             @default(0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  subscribers     BotSubscriber[]
+  broadcasts      BotBroadcast[]
+
+  @@index([userId])
+  @@index([botId])
+  @@index([isActive])
+}
+
+model BotSubscriber {
+  id                String       @id @default(uuid())
+  botId             String
+  bot               TelegramBot  @relation(fields: [botId], references: [id], onDelete: Cascade)
+  telegramUserId    String       // Chat ID / User ID
+  username          String?
+  firstName         String?
+  lastName          String?
+  tags              String?      // JSON array of tags e.g. ["vip", "leads"]
+  customFields      String?      // JSON key-value store
+  isBlocked         Boolean      @default(false)
+  lastInteractionAt DateTime     @default(now())
+  createdAt         DateTime     @default(now())
+
+  @@unique([botId, telegramUserId])
+  @@index([botId])
+  @@index([telegramUserId])
+  @@index([isBlocked])
+}
+
+model BotBroadcast {
+  id              String       @id @default(uuid())
+  botId           String
+  bot             TelegramBot  @relation(fields: [botId], references: [id], onDelete: Cascade)
+  messageText     String
+  mediaUrl        String?
+  buttons         String?      // JSON inline keyboard structure
+  status          String       @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  totalRecipients Int          @default(0)
+  successCount    Int          @default(0)
+  failedCount     Int          @default(0)
+  scheduledAt     DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([botId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+
